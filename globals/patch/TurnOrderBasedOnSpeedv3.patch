@@ -1,0 +1,350 @@
+%set_btl_state = 0x80241190
+%btl_state_update_end_turn = 0x802439D8
+%btl_update = 0x8023E438
+
+%8029C960 - jump table pointer to case -1 in btl_update (unused)
+%8029C964 - jump table pointer to case 0 in btl_update (unused)
+%8029C978 - jump table pointer to case 5 in btl_update
+
+%802A7D74: JAL set_btl_state //after mario's turn
+%802A7D78: ADDIU a0, r0, 0x0016 //(22, btl_state_update_end_player_turn)
+
+%802A9728: JAL set_btl_state //after partner's turn
+%802A972C: ADDIU a0, r0, 0x0017 //(23, btl_state_update_end_partner_turn)
+
+%ran before each enemy turn but a0 is changed based on if last enemy just went
+%80247548: ADDIU a0, r0, 0x0006 //after all enemies have gone
+%8024754C: JAL set_btl_state //(6, btl_state_update_end_turn)
+
+%802438D0: ADDIU a0, r0, 0x0014 //after mario and partner have gone (first enemy turn)
+%802438D4: JAL set_btl_state
+
+%80247ACC: JAL set_btl_state
+%80247AD0: ADDIU a0, r0, 0x0014 //next enemy going to attack
+
+%802472F4: LB a0, 0x0170 (s1) //load current 
+%802472F8: LB a0, 0x0171 (s1) //load total number of enemies
+
+%8023EDC0 render sprites if word 0x800DC070 & 0x0001
+
+#new:Data $InitialCallBool {
+    1
+}
+
+@Hook:Battle 80247ACC { %after enemy turn
+    JAL $updateTurnIndex
+    NOP
+    JAL 80241190
+    ADDIU a0, r0, 0 %set battle phase 0
+    J 80247AD4
+    NOP
+}
+
+@Hook:Battle 802A7D74 { %after mario's turn
+    JAL $updateTurnIndex
+    NOP
+    JAL 80241190
+    ADDIU a0, r0, FFFF %set battle phase -1
+    J 802A7D7C
+    NOP
+}
+
+@Hook:Battle 802A9728 { %after partner's turn
+    JAL $updateTurnIndex
+    NOP
+    JAL 80241190
+    ADDIU a0, r0, FFFF %set battle phase -1
+    J 802A7D7C
+    NOP
+}
+
+#new:Function $redirectTurn {
+    PUSH ra
+    LAW t0, $CurrentActorTurnIndex
+    LIO v0, $SpeedList
+    LAW v1, $CurrentActorTurnIndex
+    SLL v1, v1, 3 %multiply by sizeof entry in SpeedList
+    ADDU v1, v0, v1
+    LB v1, 0006 (v1) %load actor index
+    ADDIU t0, r0, FFFF
+    BEQ t0, v1, .isPlayer
+    NOP
+    ADDIU t0, r0, FFFE
+    BEQ t0, v1, .isPartner
+    NOP
+    %is an enemy, set the enemy index and also addr 0x800DC074 to 0x00000026
+    %ADDIU v1, v1, FFFF %subtract one from enemy index because it gets incremented later in the code
+    SAB v1, 800DC1E0 %current enemy index
+    JAL 80241190 %set_btl_state
+    ADDIU a0, r0, 14 %start enemy turn
+
+    BEQ r0, r0, .exit
+    NOP
+
+    .isPlayer
+    LIO t0, 00000024
+    SAW t0, 800DC074 %set to Mario turn
+    JAL 80241190 %set_btl_state
+    ADDIU a0, r0, 7 %start player turn
+    BEQ r0, r0, .exit
+    NOP
+
+    .isPartner
+    LIO t0, 00000022
+    SAW t0, 800DC074 %set to partner turn
+    JAL 80241190 %set_btl_state
+    ADDIU a0, r0, E %start partner turn
+    BEQ r0, r0, .exit
+    NOP
+    .exit
+    POP ra
+    JR RA
+    NOP
+}
+
+#new:Function $customUpdateFunctionAllies { %after an ally has gone, decide where to go next (case -1)
+    %decide who goes next
+    JAL $redirectTurn
+    NOP
+    J 8023EA64
+    NOP
+}
+
+#new:Function $customUpdateFunctionEnemies { %after an enemy has gone, decide what to do next (case 0)
+    JAL $redirectTurn
+    NOP
+    J 8023EA64
+    NOP
+}
+
+#new:Function $newCase5 {
+    JAL	80241B14 %btl_state_update_begin_turn
+    NOP
+    J 8023EA64
+    NOP
+}
+
+
+#new:Data $CurrentActorTurnIndex {
+    0
+}
+
+#export:Data $TurnCounter {
+    0
+}
+
+@Hook:Battle 80265508 { %copy speed from actor stats struct to main actor struct
+    SB v0, 01B8 (s1) %store current hp (restore from hook)
+    SB v0, 01B9 (s1) %store max hp (restore from hook)
+    LH v0, 000A (s4) %load speed u16
+    J 80265510
+    SH v0, 01BA (s1) %store speed
+}
+
+@Hook:Battle 80264C90 { %ran once on battle start
+    %set total number of actors because we hook too early to use the game's calculation
+    %copy exactly how the game does it
+    LI a0, 800DC070
+    DADDU t1, r0, r0 %enemy iterator to 0
+    DADDU t2, r0, r0 %total enemies found to 0
+    .loadActorPointer
+    LW t0, 00E0 (a0)
+    BEQ t0, r0, .checkIfExit
+    ADDIU t1, t1, 0001 %increment if pointer is null
+    ADDIU t2, t2, 0001 %total enemy count
+    .checkIfExit
+    SLTI v0, t1, 0018 %check if we have iterated over 24 actor pointers
+    BNE v0, r0, .loadActorPointer
+    ADDIU a0, a0, 0004
+    SAB t2, 800DC1E1 %set actor total
+    ORI t0, r0, 1
+    SAW t0, $InitialCallBool %initial call bool TRUE
+    SAW r0, $CurrentActorTurnIndex
+    LIO t0, $customUpdateFunctionAllies
+    SAW t0, 8029C960 %case -1 now does something in btl_update
+    LIO t0, $customUpdateFunctionEnemies
+    SAW t0, 8029C964 %case 0 now does something in btl_update
+    LIO t0, $newCase5
+    SAW t0, 8029C978 %hook case 5 code
+    %SAW r0, $hasChangedTurnBool
+
+
+	JAL $CopyActorDataToSpeedList
+	NOP
+	JAL $bubbleSortSpeedList
+	NOP
+	SAW r0, $CurrentActorTurnIndex
+    ORI t0, r0, 1
+    SAW t0, $TurnCounter
+	LB v0, 0012 (s3)
+	J 80264C98
+	SLL v0, v0, 3
+}
+
+#new:Function $CopyActorDataToSpeedList {
+    PUSH s0, s1, s2, s3, ra
+    LIO s1, $SpeedList
+
+    LIO s0, 800DC148
+    LW a0, 0000 (s0) %load mario actor ptr
+    LAH t0, 8010F2A4 %load mario speed
+    ADDIU t1, r0, FFFF %-1 for mario actor
+    SW a0, 0000 (s1) %store actor pointer
+    SH t0, 0004 (s1) %store speed
+    SB t1, 0006 (s1) %store enemy index
+
+    ADDIU s0, s0, 4
+    ADDIU s1, s1, 8
+    LW a0, 0000 (s0) %load partner actor ptr
+    %get partner speed value
+    LIO v0, 8010F2A4 %load partner id
+    LB t0, FFFE (v0) %load current partner id
+    SLL t0, t0, 3 %multiply by 8
+    ADDU t0, t0, v0
+    LH t0, 0002 (t0) %load partner speed
+    ADDIU t1, r0, FFFE %-2 for partner actor
+
+    SW a0, 0000 (s1) %store actor pointer
+    SH t0, 0004 (s1) %store speed
+    SB t1, 0006 (s1) %store enemy index
+
+    ADDIU s0, s0, 4
+    ADDIU s1, s1, 8
+    DADDU s3, r0, r0 %loop counter
+    LABU s2, 800DC1E1 %number of enemy actors
+    .loop
+    BEQ s3, s2, .exit
+    NOP
+    LW a0, 0000 (s0) %load actor pointer
+    BEQ a0, r0, .nullPtr
+    NOP
+    LH t0, 01BA (a0) %load actor speed
+    LB t1, 01F2 (a0) %load enemy index
+
+    SW a0, 0000 (s1) %store actor pointer
+    SH t0, 0004 (s1) %store speed
+    SB t1, 0006 (s1) %store enemy index
+    BEQ r0, r0, .incrementLoop
+    NOP
+
+    %TODO: verify that .nullPtr check works correctly
+    .nullPtr
+    BEQ r0, r0, .loop
+    ADDIU s0, s0, 4
+
+    .incrementLoop
+    ADDIU s0, s0, 4
+    ADDIU s1, s1, 8 %increment to next struct
+    BEQ r0, r0, .loop
+    ADDIU s3, s3, 1 %increment for loop counter
+    .exit
+    POP s0, s1, s2, s3, ra
+    JR RA
+    NOP
+}
+
+#new:Function $bubbleSortSpeedList { %it work pog
+    PUSH s0, s1, s2, s3, s4, ra
+    LIO s0, $SpeedList
+    LAB s1, 800DC1E1 %number of actors
+    ADDIU s1, s1, 2 %total number of actors including mario and partner
+    ADDIU s1, s1, FFFF %n-1 for bubble sort
+    ADDU s4, s1, r0
+    DADDU s3, r0, r0
+    .bubbleSortInit
+        LIO s0, $SpeedList
+        DADDU s2, r0, r0 %loop counter
+
+        .bubbleSort
+            LH t0, 0004 (s0) %speed of current actor
+            LH t1, 000C (s0) %speed of next actor
+            SLT t2, t0, t1
+            BNE t2, r0, .swap
+            NOP
+            %no swap
+            .afterSwap
+            ADDIU s0, s0, 8
+            ADDIU s2, s2, 1 %increment loop counter
+            BNE s2, s1, .bubbleSort
+            NOP
+            BEQ r0, r0, .endOfInnerLoop
+            NOP
+            .swap
+            LW t0, 0000 (s0) %load actor ptr
+            LH t1, 0004 (s0) %load speed
+            LB t2, 0006 (s0) %load enemy index
+
+            LW t6, 0008 (s0) %next actor ptr
+            LH t7, 000C (s0) %next actor speed
+            LB t8, 000E (s0) %next actor index
+
+            %swap in SpeedList
+            SW t0, 0008 (s0)
+            SH t1, 000C (s0)
+            SB t2, 000E (s0)
+
+            SW t6, 0000 (s0)
+            SH t7, 0004 (s0)
+            SB t8, 0006 (s0)
+            BEQ r0, r0, .afterSwap
+            NOP
+        %speedList size = numOfActors + 2
+        .endOfInnerLoop
+        ADDIU s3, s3, 1
+        SLT t0, s3, s4
+        BNE t0, r0, .bubbleSortInit
+        NOP
+    POP s0, s1, s2, s3, s4, ra
+    JR RA
+    NOP
+}
+
+#export:Data $SpeedList { %supports 24 enemy actors max, then partner + mario (26 total)
+    %Actor* actor, s16 enemyIndex, s16 enemySpeed
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+    0 0
+}
+
+#new:Function $updateTurnIndex {
+    LIO t0, $CurrentActorTurnIndex
+    LW t1, 0000 (t0) %load current actor turn index
+    ADDIU t1, t1, 1
+    LIO t4, 800DC1E1
+    LB t2, 0000 (t4)
+    ADDIU t2, t2, 2 %2 because mario + partner and one value is an index one is not
+    SLT t3, t1, t2
+    BNE t3, r0, .dontSetBack
+    NOP
+    DADDU t1, r0, r0
+    LAW t2, $TurnCounter
+    ADDIU t2, t2, 1
+    SAW t2, $TurnCounter
+    .dontSetBack
+    SW t1, 0000 (t0) %set current actor turn index
+    JR RA
+    NOP
+}

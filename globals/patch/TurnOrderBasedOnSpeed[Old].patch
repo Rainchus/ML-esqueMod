@@ -42,10 +42,37 @@ typedef struct PartnerData {
     /* 0x04 */ s16 maxHP;
     /* 0x06 */ s16 speed;
 } PartnerData; // size = 0x08
-%/
+
+
+
+old:
+@Hook:Battle 80248758 { %not always called?
+    SB t2, 0171 (s3)
+    DADDU s1, r0, r0
+    JAL $CopyActorDataToSpeedList
+    NOP
+    JAL $bubbleSortSpeedList
+    NOP
+    SAW r0, $CurrentActorTurnIndex
+    J 80248760
+    NOP
+}
+
+
+@Hook:Battle 80265508 { %copy speed from actor stats struct to main actor struct
+    SB v0, 01B8 (s1) %store current hp (restore from hook)
+    SB v0, 01B9 (s1) %store max hp (restore from hook)
+    LH v0, 000A (s4) %load speed u16
+    J 80265510
+    SH v0, 01BA (s1) %store speed
+}
 
 #new:Data $CurrentActorTurnIndex { %based on the speed values in $SpeedList
     0
+}
+
+#new:Data $hasChangedTurnBool { %0 used to tell if we have changed the turn order at the beginning of an enemies turn already
+	0
 }
 
 #new:Function $checkForResetCurrentActorTurnIndex {
@@ -128,7 +155,7 @@ typedef struct PartnerData {
 
 
 
-@Hook:Battle 80247244 { %hook enemy turn start
+@Hook:Battle 80247244 { %hook script that sets up all enemies to attack
     JAL	80263434 %restore from hook
     SW v0, 0004 (s0)
     PUSH v0
@@ -143,7 +170,7 @@ typedef struct PartnerData {
     ADDIU t0, r0, FFFE
     BEQ t0, v1, .isPartner
     NOP
-    %is an enemy, set the enemy index and 800DC074 to 0x00000026
+    %is an enemy, set the enemy index and also addr 0x800DC074 to 0x00000026
     SAB v1, 800DC1E0 %set current enemy index
     LIO t0, 00000026
     SAW t0, 800DC074 %set to enemy turn
@@ -182,24 +209,19 @@ typedef struct PartnerData {
     
 }
 
-@Hook:Battle 80265508 { %copy speed from actor stats struct to main actor struct
-    SB v0, 01B8 (s1) %store current hp (restore from hook)
-    SB v0, 01B9 (s1) %store max hp (restore from hook)
-    LH v0, 000A (s4) %load speed u16
-    J 80265510
-    SH v0, 01BA (s1) %store speed
-}
 
-@Hook:Battle 80248758 {
-    SB t2, 0171 (s3)
-    DADDU s1, r0, r0
-    JAL $CopyActorDataToSpeedList
-    NOP
-    JAL $bubbleSortSpeedList
-    NOP
-    SAW r0, $CurrentActorTurnIndex
-    J 80248760
-    NOP
+@Hook:Battle 802646C4 %ran once on battle start
+{
+	PUSH v0, v1
+	JAL $CopyActorDataToSpeedList
+	NOP
+	JAL $bubbleSortSpeedList
+	NOP
+	SAW r0, $CurrentActorTurnIndex
+	POP v0, v1
+	SLL	V0, V0, 2
+	J 802646CC
+	LUI	AT, 8028
 }
 
 #new:Function $bubbleSortSpeedList { %it work pog
@@ -256,7 +278,6 @@ typedef struct PartnerData {
     POP s0, s1, s2, s3, s4, ra
     JR RA
     NOP
-
 }
 
 #new:Function $CopyActorDataToSpeedList {
@@ -350,3 +371,4 @@ typedef struct PartnerData {
     0 0
     0 0
 }
+%/

@@ -1,0 +1,28 @@
+#string $TurnCountString {
+    [Size:0B:0B]Turn Count: [Color 0x0A][Var 0]
+    [END]
+}
+
+@Hook:Global 800E92B0 {
+    PUSH[20] ra
+    LAW t0, 8009A600
+    ORI t1, r0, 0005
+    BNE t0, t1, .notInBattle
+    NOP
+    LAW a0, $TurnCounter
+    JAL ~Func:set_message_value
+    DADDU a1, r0, r0 %Var0
+    LIO a0, $TurnCountString
+    ORI a1, r0, 0000
+    ORI a2, r0, 0038
+    ORI a3, r0, 00FF
+    SW r0, 0010 (sp)
+    JAL ~Func:draw_string
+    SW r0, 0014 (sp)
+    .notInBattle
+    POP[20] ra
+    LW ra, 008C (sp)
+    LW s7, 0084 (sp)
+    J 800E92B8
+    LW s6, 0080 (sp)
+}
